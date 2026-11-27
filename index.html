@@ -103,6 +103,9 @@ select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(-
 .ctrls{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .ctrls .play{min-width:110px}
 .ctrls .spacer{flex:1}
+.speeds{display:flex;gap:4px}
+.speeds button{padding:6px 9px;font-size:.85rem;border-radius:99px}
+.speeds button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:700}
 .ctrls label{font-size:.85rem;color:var(--muted);display:flex;align-items:center;gap:6px}
 .ctrls input[type=range]{width:110px;accent-color:var(--accent)}
 .now-label{font-size:.85rem;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -202,7 +205,8 @@ select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(-
       <button id="stop" aria-label="처음으로">■</button>
       <span class="spacer"></span>
       <label for="clear"><input id="clear" type="checkbox"> 또박또박</label>
-      <label for="rate">빠르기 <input id="rate" type="range" min="0.6" max="1.8" step="0.05" value="1"><output id="rateOut">1.0배</output></label>
+      <label for="rate">빠르기 <input id="rate" type="range" min="0.8" max="2.5" step="0.1" value="1.3"><output id="rateOut">1.3배</output></label>
+      <span class="speeds" role="group" aria-label="빠르기 바로 고르기"><button type="button" data-r="1">1배</button><button type="button" data-r="1.3">1.3</button><button type="button" data-r="1.6">1.6</button><button type="button" data-r="2">2배</button></span>
     </div>
     <div class="now-label" id="nowLabel">준비됨</div>
   </div>
@@ -826,19 +830,96 @@ function resultText(r){
   if(r.payload&&typeof r.payload==="object"){ return r.payload.text||r.payload.content||r.payload.pageText||""; }
   return "";
 }
+/* ---------- websites: read the article body only ---------- */
+let readabilityP=null;
+function getReadability(){
+  if(!readabilityP) readabilityP=import("https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/+esm").then(m=>m.Readability||(m.default&&m.default.Readability)||m.default);
+  return readabilityP;
+}
+const NOISE_ANY=/무단\s*(전재|복제|배포)|재배포\s*금지|copyright|all rights reserved|ⓒ|©|저작권자/i;
+const NOISE_SHORT=[
+  /^(입력|업데이트|수정|등록|발행|기사\s*입력|최종\s*수정|승인)\s*[:：]?\s*\d{2,4}[.\-/년]/,
+  /^\d{4}[.\-/]\s?\d{1,2}[.\-/]\s?\d{1,2}\.?\s*(\(.\)\s*)?\d{1,2}:\d{2}/,
+  /[\w.+-]+@[\w-]+\.[\w.]+/,
+  /(기자|특파원|논설위원|객원기자|에디터|PD)\s*$/,
+  /^(by\s+)?[가-힣]{2,4}\s*(기자|특파원)(\s|$)/,
+  /구독|좋아요|댓글|공유하기|공유|글자\s*크기|글씨\s*크기|프린트|인쇄|기사\s*저장|스크랩|북마크|많이\s*본|관련\s*기사|추천\s*기사|오늘의\s*뉴스|광고|AD$|로그인|회원가입|바로가기|더보기|앱\s*다운|뉴스레터|알림\s*받기|제보|URL\s*복사|링크\s*복사|카카오톡|페이스북|트위터|^X$|목록|이전\s*기사|다음\s*기사/i,
+  /^(english|中文|日本語|한국어|español|français|русский|عربي)([\s|·,/]+(english|中文|日本語|한국어|español|français|русский|عربي))*$/i,
+  /^(사진|그래픽|일러스트|영상)\s*[=:：]/,
+  /^\[?(사진|그래픽|영상)\]?\s*[가-힣A-Za-z]*\s*(제공|캡처|연합뉴스|뉴시스|뉴스1)?$/,
+];
+function isNoise(t){
+  t=clean(t); if(!t) return true;
+  if(t.length<120&&NOISE_ANY.test(t)) return true;
+  if(t.length<=50&&NOISE_SHORT.some(r=>r.test(t))) return true;
+  if(t.length<=3&&!/[.?!]$/.test(t)) return true;
+  return false;
+}
+function stripNoise(blocks){
+  const out=blocks.filter(b=>b.type!=="p"||!isNoise(b.text));
+  // drop runs of 4+ very short paragraphs (menus, tag lists)
+  const res=[]; let run=[];
+  const flush=()=>{ if(run.length<4) res.push(...run); run=[]; };
+  for(const b of out){ if(b.type==="p"&&clean(b.text).length<=12&&!/[.?!다요]$/.test(clean(b.text))) run.push(b); else { flush(); res.push(b); } }
+  flush();
+  return res;
+}
+function blocksText(blocks){ return blocks.map(b=>b.type==="table"?b.rows.map(r=>r.join(" | ")).join("\n"):clean(b.text)).join("\n"); }
+async function claudeKeepBody(blocks){
+  // Claude picks which paragraphs are the article body; the text itself is never rewritten.
+  const list=blocks.map((b,i)=>`[${i}] ${b.type==="table"?"(표) "+b.rows.slice(0,2).map(r=>r.join(" | ")).join(" / "):b.type==="h"?"(제목) "+clean(b.text):clean(b.text)}`.slice(0,400)).join("\n");
+  const client=await claudeClient();
+  const res=await client.beta.messages.create({
+    model:"claude-opus-5-5", max_tokens:4000, output_config:{effort:"low"},
+    betas:["server-side-fallback-2026-07-01"], fallbacks:"default",
+    messages:[{role:"user",content:"아래는 웹페이지에서 뽑은 문단 목록입니다. 소리 내어 읽어 줄 '본문'에 해당하는 번호만 고르세요. 기사 제목, 본문 문단, 본문 속 표·소제목은 남기고, 메뉴, 날짜·입력시간, 기자 이름·이메일, 구독·공유·좋아요 버튼, 광고, 관련기사·추천기사 목록, 저작권 문구, 사진 출처 표기는 빼세요. 답은 번호만 쉼표로 구분해 한 줄로 쓰세요. 예: 0,2,3,4\n\n"+list}]
+  });
+  const txt=res.content.filter(b=>b.type==="text").map(b=>b.text).join("");
+  const keep=new Set((txt.match(/\d+/g)||[]).map(Number).filter(n=>n<blocks.length));
+  if(keep.size<Math.min(2,blocks.length)) return blocks;
+  return blocks.filter((b,i)=>keep.has(i));
+}
+async function fetchArticle(url){
+  // 1) rendered HTML + Readability (same idea as the browser's reader mode)
+  try{
+    const r=await fetch("https://r.jina.ai/"+url,{headers:{"X-Return-Format":"html","X-Retain-Images":"none"}});
+    if(r.ok){
+      const html=await r.text();
+      const Readability=await getReadability();
+      const doc=new DOMParser().parseFromString(html,"text/html");
+      const base=doc.createElement("base"); base.href=url; doc.head&&doc.head.prepend(base);
+      const art=new Readability(doc,{charThreshold:300}).parse();
+      if(art&&art.content&&clean(art.textContent).length>200){
+        let blocks=htmlBlocks("<article>"+art.content+"</article>");
+        const title=clean(art.title||"");
+        if(title&&!(blocks[0]&&clean(blocks[0].text||"")===title)) blocks.unshift({type:"h",text:title});
+        return {blocks,title};
+      }
+    }
+  }catch(e){ console.warn("readability",e); }
+  // 2) fallback: jina's own main-content markdown
+  const r=await fetch("https://r.jina.ai/"+url,{headers:{"Accept":"text/plain","X-Retain-Images":"none"}});
+  if(!r.ok) throw new Error(String(r.status));
+  let text=await r.text();
+  const title=(text.match(/^Title:\s*(.*)$/m)||[])[1]||"";
+  text=text.replace(/^Title:.*\n?/m,m=>"# "+m.slice(6)).replace(/^(URL Source|Published Time|Markdown Content|Warning):.*$/gm,"")
+           .replace(/!\[[^\]]*\]\([^)]*\)/g,"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1").replace(/^={3,}$|^-{3,}$/gm,"");
+  return {blocks:textToBlocks(text),title};
+}
 async function readUrl(url){
   if(!/^https?:\/\//i.test(url)) url="https://"+url;
   const btn=$("urlBtn"); btn.disabled=true;
-  setStatus("웹페이지 글을 가져오는 중이에요.","",true);
+  setStatus("웹페이지에서 본문만 골라내는 중이에요.","",true);
   try{
-    const r=await fetch("https://r.jina.ai/"+url,{headers:{"Accept":"text/plain","X-Return-Format":"text"}});
-    if(!r.ok) throw new Error(String(r.status));
-    let text=await r.text();
-    text=text.replace(/^Title:.*\n?/m,m=>"# "+m.slice(6)).replace(/^(URL Source|Published Time|Markdown Content):.*$/gm,"")
-             .replace(/!\[[^\]]*\]\([^)]*\)/g,"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1").replace(/^={3,}$|^-{3,}$/gm,"");
-    if(!clean(text)) throw new Error("empty");
-    renderDoc(textToBlocks(text),url.replace(/^https?:\/\//,"").slice(0,80),"웹사이트");
-    setStatus("웹페이지 글을 가져왔어요. ▶ 읽기를 누르세요.");
+    let {blocks,title}=await fetchArticle(url);
+    blocks=stripNoise(blocks);
+    if(getKey()&&blocks.length>3){
+      setStatus("Claude가 본문이 아닌 부분을 한 번 더 걸러내는 중이에요.","",true);
+      try{ blocks=await claudeKeepBody(blocks); }catch(e){ console.warn(e); }
+    }
+    if(!clean(blocksText(blocks))) throw new Error("empty");
+    renderDoc(blocks,(clean(title)||url.replace(/^https?:\/\//,"")).slice(0,80),"웹사이트");
+    setStatus("본문만 골라 왔어요. ▶ 읽기를 누르세요.");
     return true;
   }catch(e){
     console.warn(e);
@@ -851,9 +932,9 @@ $("urlBtn").onclick=()=>{ const u=$("url").value.trim(); if(!u){ setStatus("웹�
 
 /* ---------- voices ---------- */
 const STYLES=[
-  {key:"anc",name:"아나운서",desc:"또렷하고 차분하게",rate:0.95,pitchF:1.0,pitchM:1.0,gap:420},
-  {key:"fr",name:"친구",desc:"편하고 경쾌하게",rate:1.05,pitchF:1.06,pitchM:1.03,gap:200},
-  {key:"kind",name:"상냥한",desc:"천천히 부드럽게",rate:0.88,pitchF:1.04,pitchM:1.0,gap:560},
+  {key:"anc",name:"아나운서",desc:"또렷하고 차분하게",rate:1.0,pitchF:1.0,pitchM:1.0,gap:220},
+  {key:"fr",name:"친구",desc:"편하고 경쾌하게",rate:1.1,pitchF:1.06,pitchM:1.03,gap:100},
+  {key:"kind",name:"상냥한",desc:"부드럽게",rate:0.95,pitchF:1.04,pitchM:1.0,gap:320},
 ];
 const FEMALE=/sunhi|선희|yuna|유나|sora|소라|heami|해미|jimin|지민|seohyeon|서현|soonbok|순복|yujin|유진|female|여성|여자|google\s*한국|ko-kr-x-ism|ko-kr-x-kob|ko-kr-x-koc|nara|suhyun|jian|지안/i;
 const MALE=/injoon|인준|hyunsu|현수|bongjin|봉진|gookmin|국민|minsu|민수|minjun|민준|male|남성|남자|ko-kr-x-kod|ko-kr-x-koe|junho|준호|seungwoo/i;
@@ -929,14 +1010,17 @@ function preview(){
   const r=resolveVoice(); const u=new SpeechSynthesisUtterance(r.style.key==="fr"?"안녕! 이 목소리로 읽어 줄게.":r.style.key==="kind"?"안녕하세요. 이 목소리로 천천히 읽어 드릴게요.":"안녕하십니까. 이 목소리로 읽어 드리겠습니다.");
   applyVoice(u,r); speechSynthesis.speak(u);
 }
-function applyVoice(u,r){ if(r.voice){ u.voice=r.voice; u.lang=r.voice.lang; } else u.lang="ko-KR"; u.rate=Math.min(4,r.rate*userRate*(clear?0.9:1)); u.pitch=r.pitch; u.volume=1; }
+function applyVoice(u,r){ if(r.voice){ u.voice=r.voice; u.lang=r.voice.lang; } else u.lang="ko-KR"; u.rate=Math.min(4,r.rate*userRate); u.pitch=r.pitch; u.volume=1; }
 
 /* ---------- player ---------- */
-let playing=false, runId=0, userRate=parseFloat(store.get("dareader:rate")||"1")||1, gapTimer=null, watchdog=null;
+let playing=false, runId=0, userRate=parseFloat(store.get("dareader:rate2")||"1.3")||1.3, gapTimer=null, watchdog=null;
 $("clear").checked=clear;
 $("clear").onchange=e=>{ clear=e.target.checked; store.set("dareader:clear",clear?"1":"0"); if(playing){ stopReading(true); startReading(); } };
 $("rate").value=userRate; $("rateOut").textContent=userRate.toFixed(1)+"배";
-$("rate").oninput=e=>{ userRate=parseFloat(e.target.value); $("rateOut").textContent=userRate.toFixed(1)+"배"; store.set("dareader:rate",String(userRate)); };
+$("rate").oninput=e=>{ userRate=parseFloat(e.target.value); $("rateOut").textContent=userRate.toFixed(1)+"배"; store.set("dareader:rate2",String(userRate)); };
+function setRate(r){ userRate=r; $("rate").value=r; $("rateOut").textContent=r.toFixed(1)+"배"; store.set("dareader:rate2",String(r)); document.querySelectorAll(".speeds button").forEach(b=>b.setAttribute("aria-pressed",String(+b.dataset.r===r))); if(playing){ stopReading(true); startReading(); } }
+document.querySelectorAll(".speeds button").forEach(b=>b.onclick=()=>setRate(+b.dataset.r));
+document.querySelectorAll(".speeds button").forEach(b=>b.setAttribute("aria-pressed",String(+b.dataset.r===userRate)));
 $("rate").onchange=()=>{ if(playing){ stopReading(true); startReading(); } };
 function mark(i){
   SEGS.forEach(s=>s.el.classList.remove("now"));
