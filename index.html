@@ -1379,9 +1379,30 @@ function getTts(){ if(!ttsPromise) ttsPromise=Promise.resolve(null); return ttsP
 getTts();
 function activeEngine(){ if(engine==="device") return "device"; if(engine==="claude") return "claude"; return (hasTTS&&deviceOk!==false)?"device":"claude"; }
 const CLAUDE_VOICE={F:{anc:"glassy",fr:"airy",kind:"buttery"},M:{anc:"rounded",fr:"rounded",kind:"rounded"}};
+// 한국어 낭독 일반 규칙: 단위, 주소, 분수, 시각·비율, 약어, 기호 (규칙표: 다읽어_한국어낭독규칙)
+const UNITS=[["㎡","제곱미터"],["m²","제곱미터"],["m2(?![\\d])","제곱미터"],["㎢","제곱킬로미터"],["㎥","세제곱미터"],["㎞","킬로미터"],["km(?![a-z])","킬로미터"],["㎝","센티미터"],["cm(?![a-z])","센티미터"],["㎜","밀리미터"],["mm(?![a-z])","밀리미터"],["㎏","킬로그램"],["kg(?![a-z])","킬로그램"],["㎎","밀리그램"],["mg(?![a-z])","밀리그램"],["㎖","밀리리터"],["ml(?![a-z])","밀리리터"],["ℓ","리터"],["℃","도"],["°C","도"],["‰","퍼밀"],["평(?=[^가-힣]|$)","평"]];
+function koGeneral(t){
+  t=t.replace(/https?:\/\/[^\s)\]]+|www\.[^\s)\]]+/gi," 링크 ").replace(/[\w.+-]+@[\w-]+\.[\w.]+/g," 이메일 주소 ");
+  t=t.replace(/㈜|\(주\)/g,"주식회사 ").replace(/\(재\)/g,"재단법인 ").replace(/\(사\)/g,"사단법인 ");
+  for(const [u,w] of UNITS) t=t.replace(new RegExp("(\\d)\\s*"+u,"gi"),"$1"+w);
+  t=t.replace(/(?<![\d/.])(\d{1,2})\s*\/\s*(\d{1,2})(?![\d/])/g,(_,a,b)=>+a<+b&&+b<=10?`${b}분의 ${a}`:_);
+  t=t.replace(/(?<![\d:])([01]?\d|2[0-4]):([0-5]\d)(?![\d:])/g,(_,h,m)=>`${+h}시${+m?` ${+m}분`:""}`);
+  t=t.replace(/(?<![\d:])(\d{1,2})\s*:\s*(\d{1,2})(?![\d:])/g,"$1 대 $2");
+  t=t.replace(/\bvs\.?\b/gi," 대 ").replace(/\bcf\.\s*/gi,"참고로 ").replace(/\be\.g\.\s*/gi,"예를 들어 ").replace(/\betc\.?/gi," 등");
+  t=t.replace(/▲\s*/g,"증가 ").replace(/▼\s*/g,"감소 ").replace(/△\s*(?=\d)/g,"마이너스 ").replace(/(^|\s)[-–]\s*(?=\d)/g,"$1마이너스 ");
+  t=t.replace(/[↑]/g," 증가").replace(/[↓]/g," 감소");
+  t=t.replace(/(^|\n)\s*[-–•·◦▪▫◎○●□■◇◆☆★✓✔︎]\s*/g,"$1");
+  return t;
+}
 function dateSay(t){
   const M="\u0001";
   const ymd=(y,m,d)=>`${y}년 ${+m}월${d?` ${+d}일`:""}${M}`;
+  // 기념일 표기: 3·1 운동, 8.15 광복, 6·25 전쟁 → 삼일 운동, 팔일오 광복, 육이오 전쟁 (문장 부호 해설: 마침표·가운뎃점)
+  const SINO="영일이삼사오육칠팔구";
+  t=t.replace(/(?<![\d.])(\d{1,2})\s*[.·ㆍ]\s*(\d{1,2})(?=\s*(운동|광복|전쟁|사변|사태|선언|민주|혁명|항쟁|의거|절))/g,(_,a,b)=>[...(a+b)].map(c=>SINO[+c]).join(""));
+  // 7. 22.~30. → 7월 22일부터 30일까지, 2008. 5.~10. → 2008년 5월부터 10월까지
+  t=t.replace(/(?<![\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?~\s?(\d{1,2})\.(?!\d)/g,(_,m,d,e)=>+m<=12&&+d<=31&&+e<=31?`${+m}월 ${+d}일부터 ${+e}일까지${M}`:_);
+  t=t.replace(/((?:19|20)\d{2})\.\s?(\d{1,2})\.\s?~\s?(\d{1,2})\.(?!\s?\d)/g,(_,y,m,e)=>+m<=12&&+e<=12?`${y}년 ${+m}월부터 ${+e}월까지${M}`:_);
   // 2018.2.27. / 2026. 11. 25. / 2018-02-27
   t=t.replace(/(?<![\d.])((?:19|20)\d{2})\s?[.\-/]\s?(\d{1,2})\s?[.\-/]\s?(\d{1,2})\.?(?![\d])/g,(_,y,m,d)=>+m<=12&&+d<=31?ymd(y,m,d):_);
   // 26. 11. 27. 오후 8:36
@@ -1416,7 +1437,7 @@ function lawSay(t){
 }
 // make symbols read naturally and add clear pauses
 function sayable(t){
-  t=lawSay(dateSay(t)).replace(/(^|\s)[ㄱ-ㅎㅏ-ㅣ](?=\s|$)/g,"$1").replace(/※|☞|▶|►|●|■|□|◆|◇|○(?=\s)/g," ").replace(/\s*[→⇒]\s*/g,", 그래서 ").replace(/\s*×\s*/g," 곱하기 ").replace(/\s*÷\s*/g," 나누기 ").replace(/\s+=\s+/g,", 즉 ").replace(/(\d)\s*\+\s*(\d)/g,"$1 더하기 $2").replace(/(^|\s)예\)\s*/g,"$1예를 들어, ").replace(/(\d[가-힣]{0,2})\s*~\s*(\d)/g,"$1에서 $2");
+  t=lawSay(dateSay(koGeneral(t))).replace(/(^|\s)[ㄱ-ㅎㅏ-ㅣ](?=\s|$)/g,"$1").replace(/※|☞|▶|►|●|■|□|◆|◇|○(?=\s)/g," ").replace(/\s*[→⇒]\s*/g,", 그래서 ").replace(/\s*×\s*/g," 곱하기 ").replace(/\s*÷\s*/g," 나누기 ").replace(/\s+=\s+/g,", 즉 ").replace(/(\d)\s*\+\s*(\d)/g,"$1 더하기 $2").replace(/(^|\s)예\)\s*/g,"$1예를 들어, ").replace(/(\d[가-힣]{0,2})\s*~\s*(\d)/g,"$1에서 $2");
   t=t.replace(/(\d)\s*:\s*(\d{2})\b/g,"$1:$2").replace(/(\d)\s*~\s*(\d)/g,"$1에서 $2").replace(/\s*~\s*/g,"부터 ")
      .replace(/\b(0\d{1,2})-(\d{3,4})-(\d{4})\b/g,"$1, $2, $3")
      .replace(/(\d)\s*[–—]\s*(\d)/g,"$1에서 $2").replace(/(\d)\s+-\s+(\d)/g,"$1에서 $2")
