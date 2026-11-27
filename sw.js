@@ -1,4 +1,4 @@
-// 다읽어 service worker: offline shell + receives files/links from the phone's Share menu
+// 다읽어 service worker (scope: this folder only; touches only caches named dareader-*): offline shell + receives files/links from the phone's Share menu
 const VERSION = "dareader-v1";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./cmaps-ko.json", "./examples.json", "./icon-192.png", "./icon-512.png"];
 
@@ -6,7 +6,7 @@ self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
 });
 self.addEventListener("activate", e => {
-  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== "dareader-share").map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k.startsWith("dareader-") && k !== VERSION && k !== "dareader-share").map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", e => {

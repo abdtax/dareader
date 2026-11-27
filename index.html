@@ -643,7 +643,7 @@ const DESCRIBE_PROMPT=`이 이미지는 시각장애가 있거나 화면을 볼 
 - 이미지에 없는 내용을 지어내지 마세요. 흐리거나 잘려서 읽을 수 없는 부분은 "이 부분은 잘 보이지 않습니다"라고 말합니다.
 - 마크다운 표, 글머리 기호, 별표 같은 기호를 쓰지 마세요. 큰 덩어리가 바뀔 때만 "# 소제목" 한 줄을 쓰고, 나머지는 말하듯 쓴 문장과 문단으로만 씁니다.
 - 원고 외에 인사말이나 덧붙이는 설명은 쓰지 마세요. 글도 그림도 없으면 "(내용 없음)"이라고만 쓰세요.`;
-function getKey(){ return store.get("dr-claude-key")||""; }
+function getKey(){ return store.get("dareader:claude-key")||""; }
 let sdkP=null;
 function claudeClient(){
   if(!sdkP) sdkP=import("https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.8.0/+esm").then(m=>m.default||m.Anthropic);
@@ -857,9 +857,9 @@ const STYLES=[
 ];
 const FEMALE=/sunhi|선희|yuna|유나|sora|소라|heami|해미|jimin|지민|seohyeon|서현|soonbok|순복|yujin|유진|female|여성|여자|google\s*한국|ko-kr-x-ism|ko-kr-x-kob|ko-kr-x-koc|nara|suhyun|jian|지안/i;
 const MALE=/injoon|인준|hyunsu|현수|bongjin|봉진|gookmin|국민|minsu|민수|minjun|민준|male|남성|남자|ko-kr-x-kod|ko-kr-x-koe|junho|준호|seungwoo/i;
-let clear=store.get("dr-clear")!=="0";
+let clear=store.get("dareader:clear")!=="0";
 let VOICES={F:[],M:[],all:[]}; let pick={g:"F",s:"anc"};
-try{ const p=JSON.parse(store.get("dr-voice")||"null"); if(p&&p.g&&p.s) pick=p; }catch(e){}
+try{ const p=JSON.parse(store.get("dareader:voice")||"null"); if(p&&p.g&&p.s) pick=p; }catch(e){}
 const hasTTS="speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
 function rankVoice(v){ let r=0; if(/natural|online|neural|premium|enhanced|향상|고급|wavenet/i.test(v.name)) r-=10; if(!v.localService) r-=3; if(/compact|eloquence|grandma|grandpa|rocko|shelley|sandy|flo|reed/i.test(v.name)) r+=8; return r; }
 function loadVoices(){
@@ -872,7 +872,7 @@ function loadVoices(){
   fillSelect($("selF"),all,"F"); fillSelect($("selM"),all,"M");
   updateVoiceMeta();
 }
-const override={F:store.get("dr-vF")||"",M:store.get("dr-vM")||""};
+const override={F:store.get("dareader:vF")||"",M:store.get("dareader:vM")||""};
 function fillSelect(sel,list,g){
   sel.textContent="";
   const auto=document.createElement("option"); auto.value=""; auto.textContent=VOICES[g].length?"자동 (말투마다 다른 음성)":"자동 (진짜 음성 없음, 음 높이로 흉내)"; sel.appendChild(auto);
@@ -880,9 +880,9 @@ function fillSelect(sel,list,g){
   sel.value=list.some(v=>v.name===override[g])?override[g]:"";
 }
 $("selEngine").value=engine;
-$("selEngine").onchange=e=>{ engine=e.target.value; store.set("dr-engine",engine); if(engine==="device") deviceOk=null; stopReading(true); updateVoiceMeta(); preview(); };
-$("selF").onchange=e=>{override.F=e.target.value;store.set("dr-vF",override.F);updateVoiceMeta()};
-$("selM").onchange=e=>{override.M=e.target.value;store.set("dr-vM",override.M);updateVoiceMeta()};
+$("selEngine").onchange=e=>{ engine=e.target.value; store.set("dareader:engine",engine); if(engine==="device") deviceOk=null; stopReading(true); updateVoiceMeta(); preview(); };
+$("selF").onchange=e=>{override.F=e.target.value;store.set("dareader:vF",override.F);updateVoiceMeta()};
+$("selM").onchange=e=>{override.M=e.target.value;store.set("dareader:vM",override.M);updateVoiceMeta()};
 function resolveVoice(){
   const st=STYLES.find(s=>s.key===pick.s)||STYLES[0]; const si=STYLES.indexOf(st);
   let list=VOICES[pick.g]; let fake=false;
@@ -917,7 +917,7 @@ function renderVoiceButtons(){
       b.setAttribute("aria-pressed",String(pick.g===g&&pick.s===s.key));
       const bb=document.createElement("b"); bb.textContent=s.name; const sp=document.createElement("span"); sp.textContent=s.desc;
       b.append(bb,sp); b.setAttribute("aria-label",`${gl} ${s.name} 목소리`);
-      b.onclick=()=>{ pick={g,s:s.key}; store.set("dr-voice",JSON.stringify(pick)); renderVoiceButtons(); updateVoiceMeta(); preview(); };
+      b.onclick=()=>{ pick={g,s:s.key}; store.set("dareader:voice",JSON.stringify(pick)); renderVoiceButtons(); updateVoiceMeta(); preview(); };
       box.appendChild(b);
     });
   });
@@ -932,11 +932,11 @@ function preview(){
 function applyVoice(u,r){ if(r.voice){ u.voice=r.voice; u.lang=r.voice.lang; } else u.lang="ko-KR"; u.rate=Math.min(4,r.rate*userRate*(clear?0.9:1)); u.pitch=r.pitch; u.volume=1; }
 
 /* ---------- player ---------- */
-let playing=false, runId=0, userRate=parseFloat(store.get("dr-rate")||"1")||1, gapTimer=null, watchdog=null;
+let playing=false, runId=0, userRate=parseFloat(store.get("dareader:rate")||"1")||1, gapTimer=null, watchdog=null;
 $("clear").checked=clear;
-$("clear").onchange=e=>{ clear=e.target.checked; store.set("dr-clear",clear?"1":"0"); if(playing){ stopReading(true); startReading(); } };
+$("clear").onchange=e=>{ clear=e.target.checked; store.set("dareader:clear",clear?"1":"0"); if(playing){ stopReading(true); startReading(); } };
 $("rate").value=userRate; $("rateOut").textContent=userRate.toFixed(1)+"배";
-$("rate").oninput=e=>{ userRate=parseFloat(e.target.value); $("rateOut").textContent=userRate.toFixed(1)+"배"; store.set("dr-rate",String(userRate)); };
+$("rate").oninput=e=>{ userRate=parseFloat(e.target.value); $("rateOut").textContent=userRate.toFixed(1)+"배"; store.set("dareader:rate",String(userRate)); };
 $("rate").onchange=()=>{ if(playing){ stopReading(true); startReading(); } };
 function mark(i){
   SEGS.forEach(s=>s.el.classList.remove("now"));
@@ -1049,8 +1049,8 @@ if(hasTTS){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; setTimeout
 else updateVoiceMeta();
 /* ---------- Claude key settings ---------- */
 function aiUi(){ const on=!!getKey(); $("aiState").textContent=on?"켜짐":"꺼짐"; $("aiKey").value=""; $("aiKey").placeholder=on?"저장됨 (바꾸려면 새 키 입력)":"sk-ant-..."; }
-$("aiSave").onclick=()=>{ const k=$("aiKey").value.trim(); if(!/^sk-ant-/.test(k)){ setStatus("Claude API 키는 sk-ant- 로 시작해요. 다시 확인해 주세요.","warn"); return; } store.set("dr-claude-key",k); aiUi(); setStatus("저장했어요. 이제 사진과 스캔 문서는 Claude가 설명해 줘요."); };
-$("aiDel").onclick=()=>{ try{ localStorage.removeItem("dr-claude-key"); }catch(e){} aiUi(); setStatus("키를 지웠어요. 사진은 휴대폰 글자 인식으로 읽어요."); };
+$("aiSave").onclick=()=>{ const k=$("aiKey").value.trim(); if(!/^sk-ant-/.test(k)){ setStatus("Claude API 키는 sk-ant- 로 시작해요. 다시 확인해 주세요.","warn"); return; } store.set("dareader:claude-key",k); aiUi(); setStatus("저장했어요. 이제 사진과 스캔 문서는 Claude가 설명해 줘요."); };
+$("aiDel").onclick=()=>{ try{ localStorage.removeItem("dareader:claude-key"); }catch(e){} aiUi(); setStatus("키를 지웠어요. 사진은 휴대폰 글자 인식으로 읽어요."); };
 aiUi();
 
 /* ---------- 보관함 (IndexedDB, this phone only) ---------- */
@@ -1094,7 +1094,7 @@ addEventListener("pagehide",()=>{ if(curDocId!=null) libSetPos(curDocId,CUR); })
 libRender();
 
 /* ---------- install + share menu ---------- */
-if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js").catch(e=>console.warn(e)); }
+if("serviceWorker" in navigator){ navigator.serviceWorker.register("sw.js",{scope:"./"}).catch(e=>console.warn(e)); }
 async function takeShared(){
   const q=new URLSearchParams(location.search);
   if(!q.has("shared")) return false;
