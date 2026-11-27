@@ -1,5 +1,5 @@
 // 다읽어 service worker (scope: this folder only; touches only caches named dareader-*): offline shell + receives files/links from the phone's Share menu
-const VERSION = "dareader-v2";
+const VERSION = "dareader-v3";
 const SHELL = ["./", "./index.html", "./manifest.webmanifest", "./cmaps-ko.json", "./examples.json", "./icon-192.png", "./icon-512.png"];
 
 self.addEventListener("install", e => {

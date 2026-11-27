@@ -831,6 +831,30 @@ function resultText(r){
   return "";
 }
 /* ---------- websites: read the article body only ---------- */
+function pickUrl(s){
+  const m=String(s||"").match(/https?:\/\/[^\s<>"'\]\[|]+/i) || String(s||"").match(/(?:www\.|m\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\/[^\s<>"'\]\[|]*/i);
+  if(!m) return "";
+  let u=m[0].replace(/[),.。'"」』]+$/,"");
+  if(!/^https?:\/\//i.test(u)) u="https://"+u;
+  return u;
+}
+function fixUrl(u){
+  // 네이버 블로그 PC 주소는 막히거나 틀(iframe)만 있어서, 본문이 바로 있는 모바일 주소로 바꿔요.
+  try{
+    const x=new URL(u);
+    if(/(^|\.)blog\.naver\.com$/i.test(x.hostname)){
+      let id=x.searchParams.get("blogId"), no=x.searchParams.get("logNo");
+      const seg=x.pathname.split("/").filter(Boolean);
+      if(!(id&&no) && seg.length>=2 && /^\d+$/.test(seg[1])){ id=seg[0]; no=seg[1]; }
+      if(id&&no) return `https://m.blog.naver.com/PostView.naver?blogId=${encodeURIComponent(id)}&logNo=${encodeURIComponent(no)}`;
+    }
+    if(/^cafe\.naver\.com$/i.test(x.hostname)) { x.hostname="m.cafe.naver.com"; return x.href; }
+    if(/^post\.naver\.com$/i.test(x.hostname)) { x.hostname="m.post.naver.com"; return x.href; }
+  }catch(e){}
+  return u;
+}
+const BLOCKED=/access denied|you don't have permission to access|403 forbidden|attention required|just a moment\.\.\.|captcha|비정상적인 접근|접근이 제한/i;
+function isBlockedPage(text){ const t=clean(String(text||"").replace(/<[^>]+>/g," ")); return t.length<1500 && BLOCKED.test(t); }
 let readabilityP=null;
 function getReadability(){
   if(!readabilityP) readabilityP=import("https://cdn.jsdelivr.net/npm/@mozilla/readability@0.5.0/+esm").then(m=>m.Readability||(m.default&&m.default.Readability)||m.default);
@@ -879,35 +903,55 @@ async function claudeKeepBody(blocks){
   if(keep.size<Math.min(2,blocks.length)) return blocks;
   return blocks.filter((b,i)=>keep.has(i));
 }
+function articleFromHtml(html,url,Readability){
+  const doc=new DOMParser().parseFromString(html,"text/html");
+  if(isBlockedPage(doc.body?doc.body.textContent:html)) return null;
+  const base=doc.createElement("base"); base.href=url; doc.head&&doc.head.prepend(base);
+  // 네이버 블로그·카페 등은 본문 칸이 정해져 있어서 그 칸만 먼저 봐요.
+  const known=doc.querySelector(".se-main-container, #postViewArea, .post_ct, #viewTypeSelector, .se_component_wrap, #tbody, .article_viewer");
+  const titleEl=doc.querySelector(".se-title-text, .pcol1, .tit_h3, .title_text, meta[property='og:title']");
+  let title=titleEl?clean(titleEl.content||titleEl.textContent):"";
+  let content="", text="";
+  if(known && clean(known.textContent).length>100){ content=known.innerHTML; text=known.textContent; }
+  else{
+    const art=new Readability(doc,{charThreshold:300}).parse();
+    if(art&&art.content){ content=art.content; text=art.textContent; title=title||clean(art.title||""); }
+  }
+  text=clean((text||"").replace(/​/g,""));
+  if(text.length<=150) return null;
+  let blocks=htmlBlocks("<article>"+content.replace(/​/g,"")+"</article>");
+  if(title&&!(blocks[0]&&clean(blocks[0].text||"")===title)) blocks.unshift({type:"h",text:title});
+  return {blocks,title};
+}
 async function fetchArticle(url){
-  // 1) rendered HTML + Readability (same idea as the browser's reader mode)
-  try{
-    const r=await fetch("https://r.jina.ai/"+url,{headers:{"X-Return-Format":"html","X-Retain-Images":"none"}});
-    if(r.ok){
-      const html=await r.text();
-      const Readability=await getReadability();
-      const doc=new DOMParser().parseFromString(html,"text/html");
-      const base=doc.createElement("base"); base.href=url; doc.head&&doc.head.prepend(base);
-      const art=new Readability(doc,{charThreshold:300}).parse();
-      if(art&&art.content&&clean(art.textContent).length>200){
-        let blocks=htmlBlocks("<article>"+art.content+"</article>");
-        const title=clean(art.title||"");
-        if(title&&!(blocks[0]&&clean(blocks[0].text||"")===title)) blocks.unshift({type:"h",text:title});
-        return {blocks,title};
-      }
-    }
-  }catch(e){ console.warn("readability",e); }
-  // 2) fallback: jina's own main-content markdown
+  const Readability=await getReadability().catch(e=>{ console.warn(e); return null; });
+  // 1) 렌더링된 HTML + 본문 추출(브라우저 '리더 모드'와 같은 방식). 막히면 다른 길로 한 번 더.
+  const tries=[
+    ()=>fetch("https://r.jina.ai/"+url,{headers:{"X-Return-Format":"html","X-Retain-Images":"none"}}),
+    ()=>fetch("https://api.allorigins.win/raw?url="+encodeURIComponent(url)),
+    ()=>fetch("https://corsproxy.io/?url="+encodeURIComponent(url)),
+  ];
+  if(Readability) for(const t of tries){
+    try{
+      const r=await t(); if(!r.ok) continue;
+      const got=articleFromHtml(await r.text(),url,Readability);
+      if(got) return got;
+    }catch(e){ console.warn("fetch",e); }
+  }
+  // 2) 마지막: jina가 직접 고른 본문 글
   const r=await fetch("https://r.jina.ai/"+url,{headers:{"Accept":"text/plain","X-Retain-Images":"none"}});
   if(!r.ok) throw new Error(String(r.status));
   let text=await r.text();
+  if(isBlockedPage(text.replace(/^(Title|URL Source|Published Time|Markdown Content|Warning):.*$/gm,""))) throw new Error("blocked");
   const title=(text.match(/^Title:\s*(.*)$/m)||[])[1]||"";
   text=text.replace(/^Title:.*\n?/m,m=>"# "+m.slice(6)).replace(/^(URL Source|Published Time|Markdown Content|Warning):.*$/gm,"")
            .replace(/!\[[^\]]*\]\([^)]*\)/g,"").replace(/\[([^\]]+)\]\([^)]*\)/g,"$1").replace(/^={3,}$|^-{3,}$/gm,"");
   return {blocks:textToBlocks(text),title};
 }
-async function readUrl(url){
-  if(!/^https?:\/\//i.test(url)) url="https://"+url;
+async function readUrl(input){
+  const shown=pickUrl(input)||String(input||"").trim();
+  let url=shown; if(!/^https?:\/\//i.test(url)) url="https://"+url;
+  url=fixUrl(url);
   const btn=$("urlBtn"); btn.disabled=true;
   setStatus("웹페이지에서 본문만 골라내는 중이에요.","",true);
   try{
@@ -918,12 +962,12 @@ async function readUrl(url){
       try{ blocks=await claudeKeepBody(blocks); }catch(e){ console.warn(e); }
     }
     if(!clean(blocksText(blocks))) throw new Error("empty");
-    renderDoc(blocks,(clean(title)||url.replace(/^https?:\/\//,"")).slice(0,80),"웹사이트");
+    renderDoc(blocks,(clean(title)||shown.replace(/^https?:\/\//,"")).slice(0,80),"웹사이트");
     setStatus("본문만 골라 왔어요. ▶ 읽기를 누르세요.");
     return true;
   }catch(e){
     console.warn(e);
-    setStatus("이 웹페이지의 글을 가져오지 못했어요. 글을 복사해서 '글을 직접 붙여넣기'에 넣어 주세요.","warn");
+    setStatus((e&&e.message==="blocked"?"이 사이트가 외부에서 글을 가져가는 것을 막고 있어요. ":"이 웹페이지의 글을 가져오지 못했어요. ")+"글을 복사해서 '글을 직접 붙여넣기'에 넣어 주세요.","warn");
     $("pasteBox").hidden=false; $("pasteToggle").setAttribute("aria-expanded","true");
     return false;
   }finally{ btn.disabled=false; }
@@ -1192,8 +1236,9 @@ async function takeShared(){
     await Promise.all((await cache.keys()).map(k=>cache.delete(k)));
     if(files.length){ await handleFiles(files); return true; }
     const txt=[meta.title,meta.text,meta.url].filter(Boolean).join("\n");
-    const m=txt.match(/https?:\/\/\S+/);
-    if(m && clean(txt.replace(m[0],"")).length<200){ $("url").value=m[0]; await readUrl(m[0]); return true; }
+    const link=pickUrl(meta.url)||pickUrl(txt);
+    const rest=clean(txt.replace(/https?:\/\/\S+/g,"").replace(/^\[출처\].*$/gm,""));
+    if(link && rest.length<200){ $("url").value=link; await readUrl(link); return true; }
     if(clean(txt)){ renderDoc(textToBlocks(txt),"공유받은 글","공유"); setStatus("공유받은 글이에요. ▶ 읽기를 누르세요."); return true; }
   }catch(e){ console.warn(e); setStatus("공유받은 파일을 열지 못했어요. 앱에서 직접 파일을 골라 주세요.","warn"); }
   return false;
