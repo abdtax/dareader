@@ -152,8 +152,9 @@ select{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(-
     <details id="aiBox">
       <summary>사진·표를 Claude가 설명해 주게 하기 <span class="badge" id="aiState">꺼짐</span></summary>
       <div class="adv" style="grid-template-columns:1fr">
-        <p class="formats" style="margin:0">Claude API 키를 넣으면 사진과 스캔 문서를 Claude가 보고, 표의 구조와 내용을 말로 풀어 설명하고 사진 속 상황도 알려 줘요. 사진 한 장에 대략 20~50원이 들어요. 키는 이 휴대폰에만 저장돼요. 키는 console.anthropic.com 에 가입한 뒤 'API Keys'에서 만들 수 있어요(사용한 만큼 결제).</p>
+        <p class="formats" style="margin:0">Claude API 키를 넣으면 사진과 스캔 문서를 Claude가 보고, 표의 구조와 내용을 말로 풀어 설명하고 사진 속 상황도 알려 줘요. 비용은 사진이나 문서 한 쪽에 Sonnet 기준 35원 안팎, Haiku는 2원 안팎이에요. 키는 이 휴대폰에만 저장돼요. 키는 console.anthropic.com 에 가입한 뒤 'API Keys'에서 만들 수 있어요(사용한 만큼 결제).</p>
         <label>Claude API 키<input id="aiKey" type="password" autocomplete="off" placeholder="sk-ant-..." style="font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px"></label>
+        <label>Claude 모델<select id="aiModel" style="font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px"><option value="claude-sonnet-5-5">Sonnet 5.5 · 기본 (한 쪽에 약 35원)</option><option value="claude-opus-5-5">Opus 5.5 · 더 정밀 (Sonnet의 약 2배)</option><option value="claude-haiku-5-5">Haiku 5.5 · 가장 저렴 (Sonnet의 약 20분의 1)</option></select></label>
         <div class="row"><button type="button" class="primary" id="aiSave">저장</button><button type="button" id="aiDel">키 지우기</button></div>
       </div>
     </details>
@@ -708,10 +709,11 @@ function ocrToBlocks(data,W,H){
   const raw=[];
   for(const b of (data.blocks||[])) for(const p of (b.paragraphs||[])) for(const ln of (p.lines||[])){
     const items=[];
-    for(const w of (ln.words||[])){
+    let wi=0;
+    for(const w of (ln.words||[])){ wi++;
       if(w.confidence<30) continue;
       if(!/[가-힣A-Za-z0-9§①-⑳]/.test(w.text) && w.confidence<85) continue;
-      for(const sy of (w.symbols&&w.symbols.length?w.symbols:[w])){ const bb=sy.bbox; if(!clean(sy.text)) continue; items.push({x0:bb.x0,x1:bb.x1,s:sy.text,top:bb.y0,bottom:bb.y1}); }
+      for(const sy of (w.symbols&&w.symbols.length?w.symbols:[w])){ const bb=sy.bbox; if(!clean(sy.text)) continue; items.push({x0:bb.x0,x1:bb.x1,s:sy.text,top:bb.y0,bottom:bb.y1,w:ln.bbox.y0+":"+wi}); }
     }
     if(!items.length) continue;
     // line height from Hangul/Latin letters, not from punctuation
@@ -727,7 +729,7 @@ function ocrToBlocks(data,W,H){
 const DESCRIBE_PROMPT=`이 이미지는 시각장애가 있거나 화면을 볼 수 없는 사람이 귀로만 듣고 이해해야 하는 자료입니다. 소리 내어 읽어 줄 원고를 한국어로 써 주세요.
 
 원고 순서:
-1. 어떤 이미지인지 한두 문장으로 먼저 알려 주세요. 예: "보건소에서 낸 건강검진 안내문 사진입니다. 위에 제목, 가운데 일정표, 아래 문의처가 있습니다." 사진이라면 장면, 사람, 물건, 분위기도 짧게 묘사합니다.
+1. 어떤 자료인지 한두 문장으로 먼저 알려 주세요(웹페이지나 문서를 찍은 것이면 무슨 글인지만). 예: "보건소에서 낸 건강검진 안내문 사진입니다. 위에 제목, 가운데 일정표, 아래 문의처가 있습니다." 사진이라면 장면, 사람, 물건, 분위기도 짧게 묘사합니다.
 2. 글은 위에서 아래로, 사람이 읽는 순서대로 빠짐없이 읽어 줍니다. 숫자, 날짜, 금액, 이름은 보이는 그대로 정확히 옮깁니다.
 3. 표는 그대로 칸을 읽지 말고, 듣기만 해도 이해되게 풀어서 설명합니다.
    - 먼저 표의 구조를 말합니다: 무엇에 대한 표인지, 가로줄(행)이 무엇으로 나뉘고 세로줄(열)이 무엇으로 나뉘는지, 단위는 무엇인지, 큰 분류 아래 작은 분류가 있으면 그 관계까지.
@@ -737,10 +739,22 @@ const DESCRIBE_PROMPT=`이 이미지는 시각장애가 있거나 화면을 볼 
 4. 그래프나 도표는 어떤 종류인지, 가로축과 세로축이 무엇인지, 전체 흐름과 주요 수치를 설명합니다.
 
 규칙:
+- 본문과 상관없는 것은 읽지도 묘사하지도 마세요: 인쇄할 때 붙은 날짜·시각·페이지 제목·인터넷 주소·쪽 번호, 브라우저나 앱 화면의 메뉴·단추·닫기 표시, 회원 가입·로그인·구독·앱 설치 안내 띠, 광고, 공유·좋아요 단추, 관련 기사 목록, 저작권 문구. 이런 것의 위치(맨 위, 오른쪽 끝 등)도 말하지 마세요.
 - 이미지에 없는 내용을 지어내지 마세요. 흐리거나 잘려서 읽을 수 없는 부분은 "이 부분은 잘 보이지 않습니다"라고 말합니다.
 - 마크다운 표, 글머리 기호, 별표 같은 기호를 쓰지 마세요. 큰 덩어리가 바뀔 때만 "# 소제목" 한 줄을 쓰고, 나머지는 말하듯 쓴 문장과 문단으로만 씁니다.
 - 원고 외에 인사말이나 덧붙이는 설명은 쓰지 마세요. 글도 그림도 없으면 "(내용 없음)"이라고만 쓰세요.`;
+const PAGE_PROMPT=`이 그림은 문서(PDF)의 한 쪽입니다. 화면을 볼 수 없는 사람에게 소리 내어 읽어 줄 원고를 한국어로 써 주세요.
+1. 본문 글은 위에서 아래로, 쓰인 그대로 한 글자도 바꾸지 말고 옮깁니다. 띄어쓰기도 원문대로 합니다. 숫자, 날짜, 금액, 조문 표기(§71①, 제71조 등)는 보이는 그대로 정확히 옮깁니다.
+2. 인쇄할 때 붙은 머리말과 꼬리말(인쇄 날짜와 시각, '네이버 블로그 :: 글 내용 Print' 같은 페이지 제목, 인터넷 주소, 1/9 같은 쪽 번호)은 빼세요. 회원·구독·앱 안내 띠, 광고, 닫기·공유 단추, 메뉴, 관련 기사 목록, 저작권 문구, 따옴표 장식 그림(66 같은 것)도 빼고, 이런 것이 있다는 말도 하지 마세요.
+3. 제목이나 소제목은 "# 제목" 한 줄로 씁니다.
+4. 표는 칸을 그대로 나열하지 말고, 먼저 무엇을 무엇으로 나눈 표인지 한 문장으로 말한 뒤 줄마다 자연스러운 문장으로 풀어 줍니다. 비교표라면 기준마다 대상을 견주어 말합니다. 표 안의 숫자와 표현은 그대로 씁니다.
+5. 강조 상자, 주의 상자, 사례 상자는 "주의 상자입니다." 처럼 짧게 알린 뒤 내용을 읽습니다.
+규칙: 그림에 없는 내용은 지어내지 마세요. 잘려서 이어지는 문장은 잘린 그대로 둡니다. 마크다운 표, 글머리 기호, 별표는 쓰지 말고 문장과 문단으로만 씁니다. 인사말이나 덧붙이는 설명은 쓰지 마세요. 글이 없으면 "(내용 없음)"이라고만 쓰세요.`;
+let usedPhoneOcr=false;
 function getKey(){ return store.get("dareader:claude-key")||""; }
+function getModel(){ const m=store.get("dareader:claude-model"); return ["claude-opus-5-5","claude-haiku-5-5"].includes(m)?m:"claude-sonnet-5-5"; }
+// Sonnet·Opus는 거절 시 다른 모델로 넘기는 기능을 켜고, Haiku는 그 기능이 없어 그대로 보내요
+function withFallback(p){ return p.model==="claude-haiku-5-5"?p:{...p,betas:["server-side-fallback-2026-07-01"],fallbacks:"default"}; }
 let sdkP=null;
 function claudeClient(){
   if(!sdkP) sdkP=import("https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@1.8.0/+esm").then(m=>m.default||m.Anthropic);
@@ -755,21 +769,19 @@ async function shrinkImage(blob){
   const buf=new Uint8Array(await out.arrayBuffer()); let bin=""; for(let i=0;i<buf.length;i+=0x8000) bin+=String.fromCharCode.apply(null,buf.subarray(i,i+0x8000));
   return btoa(bin);
 }
-async function describeWithClaude(blob,label){
+async function describeWithClaude(blob,label,mode){
   setStatus(`${label} 사진을 Claude가 보고 설명을 쓰는 중이에요. 보통 20초~1분 걸려요.`,"",true);
   const client=await claudeClient();
   const data=await shrinkImage(blob);
-  const res=await client.beta.messages.create({
-    model:"claude-opus-5-5",
+  const res=await client.beta.messages.create(withFallback({
+    model:getModel(),
     max_tokens:16000,
     output_config:{effort:"medium"},
-    betas:["server-side-fallback-2026-07-01"],
-    fallbacks:"default",
     messages:[{role:"user",content:[
       {type:"image",source:{type:"base64",media_type:"image/jpeg",data}},
-      {type:"text",text:DESCRIBE_PROMPT}
+      {type:"text",text:mode==="page"?PAGE_PROMPT:DESCRIBE_PROMPT}
     ]}]
-  });
+  }));
   if(res.stop_reason==="refusal") throw new Error("Claude가 이 사진은 설명할 수 없다고 했어요.");
   const text=res.content.filter(b=>b.type==="text").map(b=>b.text).join("\n").trim();
   return text==="(내용 없음)"?"":text;
@@ -792,8 +804,8 @@ async function enrichTables(blocks){
     const before=blocks.slice(Math.max(0,i-2),i).filter(x=>x.type==="p"||x.type==="h").map(x=>clean(x.text)).join("\n").slice(-600);
     const md=rows.map(r=>"| "+r.join(" | ")+" |").join("\n");
     try{
-      const res=await client.beta.messages.create({model:"claude-opus-5-5",max_tokens:4000,output_config:{effort:"low"},betas:["server-side-fallback-2026-07-01"],fallbacks:"default",
-        messages:[{role:"user",content:TABLE_PROMPT+(before?"\n\n표 바로 앞 글:\n"+before:"")+"\n\n표:\n"+md}]});
+      const res=await client.beta.messages.create(withFallback({model:getModel(),max_tokens:4000,output_config:{effort:"medium"},
+        messages:[{role:"user",content:TABLE_PROMPT+(before?"\n\n표 바로 앞 글:\n"+before:"")+"\n\n표:\n"+md}]}));
       const t=res.content.filter(x=>x.type==="text").map(x=>x.text).join("\n").trim();
       if(t) b.explain=t;
     }catch(e){ console.warn(e); break; }
@@ -803,9 +815,9 @@ async function enrichTables(blocks){
 function tableHint(blocks){
   return blocks.some(b=>b.type==="table")&&!getKey()?" 표는 규칙에 따라 풀어 읽어요. Claude가 더 자연스럽게 설명하게 하려면 위의 '사진·표를 Claude가 설명해 주게 하기'를 눌러 키를 넣어 주세요.":"";
 }
-async function ocrBlob(blob, label){
+async function ocrBlob(blob, label, mode){
   if(getKey()){
-    try{ return textToBlocks(await describeWithClaude(blob,label)); }
+    try{ return textToBlocks(await describeWithClaude(blob,label,mode)); }
     catch(e){
       console.warn(e);
       const st=e&&e.status;
@@ -814,8 +826,9 @@ async function ocrBlob(blob, label){
     }
   }
   setStatus(`${label} 사진 속 글자를 읽을 준비 중이에요.`,"",true);
+  usedPhoneOcr=true;
   const w=await getOcr();
-  if(!w.__psm){ await w.setParameters({tessedit_pageseg_mode:window.__PSM||"6"}); w.__psm=true; }
+  { const psm=window.__PSM||OCR_PSM; if(w.__psm!==psm){ await w.setParameters({tessedit_pageseg_mode:psm}); w.__psm=psm; } }
   const cv=await prepOcrImage(blob);
   const {data}=await w.recognize(cv,{},{blocks:true,text:true});
   return ocrToBlocks(data,cv.width,cv.height);
@@ -835,6 +848,13 @@ class KoCMapFactory{
 }
 /* ---------- layout engine shared by PDF text and OCR: lines → paragraphs + tables ---------- */
 // line: {top,bottom,h,items:[{x0,x1,s}]}  (top-down coordinates)
+const OCR_SPACE={mode:"gap",th:0.35}; const OCR_PSM="6"; // 1쪽 원문과 대조해 고른 값
+function ocrNeedSpace(A,B,gap,h){
+  const m=(window.__SPACE||OCR_SPACE.mode), th=(window.__SPTH||OCR_SPACE.th);
+  if(m==="word") return A.w!==B.w;
+  if(m==="wordgap") return A.w!==B.w && gap>h*th*0.6;
+  return gap>h*th;
+}
 function lineFromItems(items,h,mode){
   items.sort((a,b)=>a.x0-b.x0);
   // 띄어쓰기(사진 글자): 한글은 글자 폭이 일정해서, 글자 중심 사이 거리가 평소보다 넓으면 띄어 쓴 곳이에요
@@ -853,7 +873,7 @@ function lineFromItems(items,h,mode){
     const gap=end===null?0:it.x0-end;
     if(!cur||gap>h*(mode==="ocr"?2.5:1.1)){ cur={x0:it.x0,x1:it.x1,text:it.s}; cells.push(cur); }
     else{
-      const needSpace = mode==="ocr" ? ocrSpace(prevIt,it,gap) : gap>h*0.18;
+      const needSpace = mode==="ocr" ? ocrNeedSpace(prevIt,it,gap,h) : gap>h*0.18;
       if(needSpace && !/\s$/.test(cur.text) && !/^\s/.test(it.s)) cur.text+=" ";
       cur.text+=it.s; cur.x1=Math.max(cur.x1,it.x1);
     }
@@ -968,7 +988,7 @@ function flowToBlocks(flow){
 }
 function dropHeadersFooters(pages){
   const seen={}; pages.forEach(pg=>new Set(pg.lines.filter(l=>l.edge).map(l=>hfKey(l.text))).forEach(k=>seen[k]=(seen[k]||0)+1));
-  pages.forEach(pg=>{ pg.lines=pg.lines.filter(l=>!/블로그\s*::\s*글\s*내용\s*print/i.test(l.text)&&!(l.edge&&((pages.length>1&&seen[hfKey(l.text)]>=2)||HF_RE.test(hfKey(l.text))))); });
+  pages.forEach(pg=>{ pg.lines=pg.lines.filter(l=>!/블로그\s*::\s*글\s*내용\s*print/i.test(l.text)&&!(l.edge&&/naver\.com|::.*(print|내용)|blog\./i.test(l.text))&&!(l.edge&&((pages.length>1&&seen[hfKey(l.text)]>=2)||HF_RE.test(hfKey(l.text))))); });
 }
 function pdfRawLines(items,H){
   const its=items.filter(it=>"str" in it&&it.str.trim()!==""&&it.transform).map(it=>{ const h=Math.abs(it.height||it.transform[3]||10); const y=it.transform[5]; return {x0:it.transform[4],x1:it.transform[4]+(it.width||0),s:it.str,top:H-y-h*0.85,bottom:H-y+h*0.15,h}; });
@@ -1007,13 +1027,13 @@ async function readPdf(buf, name){
   if(scanned.length){
     for(let k=0;k<scanned.length;k++){
       const n=scanned[k]; const page=await pdf.getPage(n);
-      const vp0=page.getViewport({scale:1}); const scale=Math.min(3,Math.sqrt(1600000/(vp0.width*vp0.height)));
+      const vp0=page.getViewport({scale:1}); const scale=window.__PSCALE?Math.min(4.5,window.__PSCALE/vp0.width):Math.min(4.5,1400/vp0.width); // 원문 대조 실험에서 가장 잘 맞은 크기
       const vp=page.getViewport({scale}); const cv=document.createElement("canvas"); cv.width=vp.width; cv.height=vp.height;
       const ctx=cv.getContext("2d"); ctx.fillStyle="#fff"; ctx.fillRect(0,0,cv.width,cv.height);
       await page.render({canvasContext:ctx,viewport:vp}).promise;
-      const blob=await new Promise(r=>cv.toBlob(r,"image/jpeg",0.9));
+      const blob=await new Promise(r=>cv.toBlob(r,"image/png"));
       let out=[];
-      try{ out=await ocrBlob(blob,`${name} ${n}쪽(${k+1}/${scanned.length})`); }
+      try{ out=await ocrBlob(blob,`${name} ${n}쪽(${k+1}/${scanned.length})`,"page"); }
       catch(e){ out=[{type:"p",text:`${n}쪽은 사진으로 된 쪽이라 읽지 못했어요. ${e.message}`}]; if(!e.soft) {} }
       const ix=blocks.findIndex(b=>b.type==="scan"&&b.page===n); blocks.splice(ix,1,...out);
     }
@@ -1050,6 +1070,7 @@ function htmlOrText(t){ return /<html|<body|<p[ >]/i.test(t)?htmlBlocks(t):textT
 
 async function handleFiles(list){
   const files=[...list]; if(!files.length) return;
+  usedPhoneOcr=false;
   const all=[]; const fails=[];
   for(let i=0;i<files.length;i++){
     const f=files[i];
@@ -1064,6 +1085,7 @@ async function handleFiles(list){
   const name=files.length===1?files[0].name:`${files[0].name} 외 ${files.length-1}개`;
   if(all.length){ await enrichTables(all); renderDoc(all,name,"파일"); }
   if(fails.length) setStatus(fails.join(" / "),"warn");
+  else if(usedPhoneOcr) setStatus(`이 파일은 글자가 아니라 그림으로 저장돼 있어서 휴대폰 글자 인식으로 읽었어요. 숫자, 기호(§ ① 등), 표가 많이 틀릴 수 있어요. 정확하게 읽으려면 위의 '사진·표를 Claude가 설명해 주게 하기'에 Claude 키를 넣고 파일을 다시 열어 주세요.`,"warn");
   else setStatus(`다 열었어요. 아래 ▶ 읽기를 누르세요. 문장을 누르면 그곳부터 읽어요.`+tableHint(all));
 }
 const drop=$("drop"), fileIn=$("file");
@@ -1166,11 +1188,11 @@ async function claudeKeepBody(blocks){
   // Claude picks which paragraphs are the article body; the text itself is never rewritten.
   const list=blocks.map((b,i)=>`[${i}] ${b.type==="table"?"(표) "+b.rows.slice(0,2).map(r=>r.join(" | ")).join(" / "):b.type==="h"?"(제목) "+clean(b.text):clean(b.text)}`.slice(0,400)).join("\n");
   const client=await claudeClient();
-  const res=await client.beta.messages.create({
-    model:"claude-opus-5-5", max_tokens:4000, output_config:{effort:"low"},
-    betas:["server-side-fallback-2026-07-01"], fallbacks:"default",
+  const res=await client.beta.messages.create(withFallback({
+    model:getModel(), max_tokens:4000, output_config:{effort:"low"},
+    
     messages:[{role:"user",content:"아래는 웹페이지에서 뽑은 문단 목록입니다. 소리 내어 읽어 줄 '본문'에 해당하는 번호만 고르세요. 기사 제목, 본문 문단, 본문 속 표·소제목은 남기고, 메뉴, 날짜·입력시간, 기자 이름·이메일, 구독·공유·좋아요 버튼, 광고, 관련기사·추천기사 목록, 저작권 문구, 사진 출처 표기는 빼세요. 답은 번호만 쉼표로 구분해 한 줄로 쓰세요. 예: 0,2,3,4\n\n"+list}]
-  });
+  }));
   const txt=res.content.filter(b=>b.type==="text").map(b=>b.text).join("");
   const keep=new Set((txt.match(/\d+/g)||[]).map(Number).filter(n=>n<blocks.length));
   if(keep.size<Math.min(2,blocks.length)) return blocks;
@@ -1357,23 +1379,45 @@ function getTts(){ if(!ttsPromise) ttsPromise=Promise.resolve(null); return ttsP
 getTts();
 function activeEngine(){ if(engine==="device") return "device"; if(engine==="claude") return "claude"; return (hasTTS&&deviceOk!==false)?"device":"claude"; }
 const CLAUDE_VOICE={F:{anc:"glassy",fr:"airy",kind:"buttery"},M:{anc:"rounded",fr:"rounded",kind:"rounded"}};
+function dateSay(t){
+  const M="\u0001";
+  const ymd=(y,m,d)=>`${y}년 ${+m}월${d?` ${+d}일`:""}${M}`;
+  // 2018.2.27. / 2026. 11. 25. / 2018-02-27
+  t=t.replace(/(?<![\d.])((?:19|20)\d{2})\s?[.\-/]\s?(\d{1,2})\s?[.\-/]\s?(\d{1,2})\.?(?![\d])/g,(_,y,m,d)=>+m<=12&&+d<=31?ymd(y,m,d):_);
+  // 26. 11. 27. 오후 8:36
+  t=t.replace(/(?<![\d.])(\d{2})\.\s?(\d{1,2})\.\s?(\d{1,2})\.\s*(?=오전|오후|\d{1,2}:\d{2})/g,(_,y,m,d)=>ymd("20"+y,m,d));
+  // 26.11.26 / 26. 11. 26. (두 자리 연도)
+  t=t.replace(/(?<![\d.§])(\d{2})\.\s?(\d{1,2})\.\s?(\d{1,2})\.?(?![\d.])/g,(_,y,m,d)=>+m>=1&&+m<=12&&+d>=1&&+d<=31?ymd("20"+y,m,d):_);
+  // 2024.1. (년·월)
+  t=t.replace(/(?<![\d.])((?:19|20)\d{2})\.\s?(\d{1,2})\.(?!\s?\d)/g,(_,y,m)=>+m<=12?ymd(y,m):_);
+  // ~ 6.30. → ~ 6월 30일
+  t=t.replace(/(~\s*)(\d{1,2})\.(\d{1,2})\.?(?![\d%])/g,(_,a,m,d)=>+m<=12&&+d<=31?`${a}${+m}월 ${+d}일${M}`:_);
+  // 날짜 ~ 날짜 → 부터 … 까지
+  t=t.replace(/(\d+[년월일])\u0001?\s*~\s*(\d+년 \d+월 \d+일|\d+월 \d+일|\d+월|\d+일)\u0001?(\s*[은는])?/g,(_,a,b2,j)=>`${a}부터 ${b2}까지${j?"는":""}${M}`);
+  // 시각
+  t=t.replace(/(오전|오후)\s*(\d{1,2}):(\d{2})/g,(_,a,h,m)=>`${a} ${+h}시${+m?` ${+m}분`:""}`);
+  t=t.replace(/(일\u0001?\s*)(\d{1,2}):(\d{2})(?!\d)/g,(_,a,h,m)=>`${a}${+h}시${+m?` ${+m}분`:""}`);
+  t=t.replace(/\u0001\s*(?=(?:[은는가을를의에도,.)]|이(?!후|전)|부터|까지))/g,"");
+  return t.replace(/\u0001\s*/g," ");
+}
 function lawSay(t){
   const circ=c=>c.charCodeAt(0)-0x2460+1;
   // §71①1가 → 71조 1항 1호 가목,  §71의2 → 71조의2
-  t=t.replace(/§§?\s*(\d+)(?:\s*의\s*(\d+))?\s*([①-⑳])?\s*(?:(\d+)(?![\d,.]*\s*(?:년|월|일|원|%|개|명|세|조|만|억)))?(?:\s*([가나다라마바사아자차카타파하])(?![가-힣]))?/g,
+  t=t.replace(/§§?\s*(\d+)(?:\s*의\s*(\d+))?\s*([①-⑳])?\s*(?:(\d+)(?![\d,.]*\s*(?:년|월|일|원|%|개|명|세|조|만|억|호)))?(?:\s*([가나다라마바사아자차카타파하])(?![가-힣]))?/g,
     (_,jo,ui,hang,ho,mok)=>`${jo}조${ui?"의"+ui:""}${hang?" "+circ(hang)+"항":""}${ho?" "+ho+"호":""}${mok?" "+mok+"목":""} `);
   // 제71조①, 71조② → 1항
   t=t.replace(/(조(?:의\s*\d+)?)\s*([①-⑳])/g,(_,a,c)=>`${a} ${circ(c)}항`);
   t=t.replace(/(항)\s*(\d+)(?=\s|[,.)]|$)(?![호목])/g,"$1 $2호");
   // 나머지 동그라미 숫자는 '1항'이 아니라 번호로
   t=t.replace(/[①-⑳]/g,c=>` ${circ(c)}번, `);
+  t=t.replace(/(조(?:의\s*\d+)?)(제\d+항)/g,"$1 $2").replace(/(항)(제\d+호)/g,"$1 $2").replace(/(호)(제\d+목)/g,"$1 $2");
   t=t.replace(/(조(?:의\d+)?|항|호|목) +(?=[에은는이가을를의도와과로만,.)])/g,"$1");
   return t.replace(/\bQ\s*&\s*A\b/gi,"큐앤에이").replace(/\bR\s*&\s*D\b/g,"알앤디").replace(/\bM\s*&\s*A\b/g,"엠앤에이");
 }
 // make symbols read naturally and add clear pauses
 function sayable(t){
-  t=lawSay(t).replace(/(\d[가-힣]{0,2})\s*~\s*(\d)/g,"$1에서 $2");
-  t=t.replace(/(\d)\s*:\s*(\d{2})\b/g,"$1:$2").replace(/(\d)\s*~\s*(\d)/g,"$1에서 $2").replace(/~/g," ")
+  t=lawSay(dateSay(t)).replace(/(^|\s)[ㄱ-ㅎㅏ-ㅣ](?=\s|$)/g,"$1").replace(/※|☞|▶|►|●|■|□|◆|◇|○(?=\s)/g," ").replace(/\s*[→⇒]\s*/g,", 그래서 ").replace(/\s*×\s*/g," 곱하기 ").replace(/\s*÷\s*/g," 나누기 ").replace(/\s+=\s+/g,", 즉 ").replace(/(\d)\s*\+\s*(\d)/g,"$1 더하기 $2").replace(/(^|\s)예\)\s*/g,"$1예를 들어, ").replace(/(\d[가-힣]{0,2})\s*~\s*(\d)/g,"$1에서 $2");
+  t=t.replace(/(\d)\s*:\s*(\d{2})\b/g,"$1:$2").replace(/(\d)\s*~\s*(\d)/g,"$1에서 $2").replace(/\s*~\s*/g,"부터 ")
      .replace(/\b(0\d{1,2})-(\d{3,4})-(\d{4})\b/g,"$1, $2, $3")
      .replace(/(\d)\s*[–—]\s*(\d)/g,"$1에서 $2").replace(/(\d)\s+-\s+(\d)/g,"$1에서 $2")
      .replace(/[·•∙ㆍ]/g,", ").replace(/\s\/\s|\//g,", ")
@@ -1464,8 +1508,9 @@ renderVoiceButtons();
 if(hasTTS){ loadVoices(); speechSynthesis.onvoiceschanged=loadVoices; setTimeout(loadVoices,800); setTimeout(loadVoices,2500); }
 else updateVoiceMeta();
 /* ---------- Claude key settings ---------- */
-function aiUi(){ const on=!!getKey(); $("aiState").textContent=on?"켜짐":"꺼짐"; $("aiKey").value=""; $("aiKey").placeholder=on?"저장됨 (바꾸려면 새 키 입력)":"sk-ant-..."; }
+function aiUi(){ const on=!!getKey(); $("aiModel").value=getModel(); $("aiState").textContent=on?"켜짐":"꺼짐"; $("aiKey").value=""; $("aiKey").placeholder=on?"저장됨 (바꾸려면 새 키 입력)":"sk-ant-..."; }
 $("aiSave").onclick=()=>{ const k=$("aiKey").value.trim(); if(!/^sk-ant-/.test(k)){ setStatus("Claude API 키는 sk-ant- 로 시작해요. 다시 확인해 주세요.","warn"); return; } store.set("dareader:claude-key",k); aiUi(); setStatus("저장했어요. 이제 사진, 스캔 문서, 표는 Claude가 설명해 줘요."); };
+$("aiModel").onchange=()=>{ store.set("dareader:claude-model",$("aiModel").value); setStatus({"claude-opus-5-5":"Opus로 바꿨어요. 더 정밀하지만 비용이 Sonnet의 약 2배예요.","claude-haiku-5-5":"Haiku로 바꿨어요. 가장 저렴해요. 숫자나 표가 틀리면 Sonnet으로 바꿔 주세요.","claude-sonnet-5-5":"Sonnet으로 바꿨어요."}[$("aiModel").value]); };
 $("aiDel").onclick=()=>{ try{ localStorage.removeItem("dareader:claude-key"); }catch(e){} aiUi(); setStatus("키를 지웠어요. 사진은 휴대폰 글자 인식으로 읽어요."); };
 aiUi();
 
